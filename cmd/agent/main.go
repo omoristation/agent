@@ -314,7 +314,7 @@ func run() {
 		})
 		// 提供静态文件服务(HTML页面)
 		http.HandleFunc("/probetest", func(w http.ResponseWriter, r *http.Request) {
-			//http.ServeFile(w, r, "probetest.html") //二进制同目录静态文件 下面把静态文件编译进二进制
+			//http.ServeFile(w, r, "probetest.html") //debug模式 二进制同目录静态文件 下面把静态文件编译进二进制
 			data, err := probeHTML.ReadFile("probetest.html")
 			if err != nil {
 				w.WriteHeader(http.StatusInternalServerError)
@@ -673,7 +673,7 @@ func doSelfUpdate(useLocalVersion bool) {
 	printf("检查更新: %v", v)
 	var latest *selfupdate.Release
 	var err error
-	if monitor.CachedCountryCode != "cn" && !agentConfig.UseGiteeToUpgrade {
+	//if monitor.CachedCountryCode != "cn" && !agentConfig.UseGiteeToUpgrade { //diy
 		updater, erru := selfupdate.NewUpdater(selfupdate.Config{
 			BinaryName: binaryName,
 		})
@@ -681,8 +681,8 @@ func doSelfUpdate(useLocalVersion bool) {
 			printf("更新失败: %v", erru)
 			return
 		}
-		latest, err = updater.UpdateSelf(v, "omoristation/agent")
-	} else {
+		latest, err = updater.UpdateSelf(v, "omoristation/agent") //diy
+	/*} else {
 		updater, erru := selfupdate.NewGiteeUpdater(selfupdate.Config{
 			BinaryName: binaryName,
 		})
@@ -691,7 +691,7 @@ func doSelfUpdate(useLocalVersion bool) {
 			return
 		}
 		latest, err = updater.UpdateSelf(v, "naibahq/agent")
-	}
+	}*/
 	if err != nil {
 		printf("更新失败: %v", err)
 		return

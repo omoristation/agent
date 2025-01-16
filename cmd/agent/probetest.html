@@ -31,7 +31,7 @@
             table td{padding: 6px 6px; border:1px solid #CCCCCC;overflow:hidden;white-space:nowrap;min-width:150px;border-right:0px;border-bottom:0px;}
             .page {width: auto; padding: 0px 0px; margin: 0 auto; text-align: left;}
             .button{height:auto;width:auto;color:#ffffff;background-color:#707aece3;font-size:12px;font-weight:normal;font-family:Arial;border:0px solid #dcdcdc;cursor:pointer;max-width:100px;border-radius: .25rem;display:inline-block;white-space:nowrap;overflow:hidden;}
-            .span{height:auto;width:auto;color:#ffffff;background-color:#4d8c2de3;font-weight:normal;border:0px solid #dcdcdc;cursor:pointer;max-width:100px;border-radius: .25rem;display:inline-block;white-space:nowrap;overflow:hidden;margin-bottom:-4px;}
+            .span{height:auto;width:auto;color:#ffffff;background-color:#4d8c2de3;font-weight:normal;border:0px solid #dcdcdc;cursor:pointer;max-width:100px;border-radius: .25rem;display:inline-block;white-space:nowrap;overflow:hidden;margin-bottom:-4px;padding-inline: 4px;}
             .submit{height:auto;width:auto;color:#ffffff;background-color:#b74e83e3;font-size:12px;font-weight:normal;font-family:Arial;border:0px solid #dcdcdc;cursor:pointer;} 
             .form{margin:0px;display: inline;}
             @media only screen and (max-width:800px) {
@@ -176,7 +176,7 @@
                 var hour=Math.floor((s-day*24*3600)/3600);
                 var minute=Math.floor((s-day*24*3600-hour*3600)/60);
                 var second=s-day*24*3600-hour*3600-minute*60;
-                return day+"/"+hour+"/"+minute+"/"+second;
+                return day+"/"+hour+"/"+minute;
             }
             function getbasicData(){
                 fetch('/basic', {

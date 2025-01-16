@@ -113,7 +113,7 @@ func GetHost() *model.Host {
 	if runtime.GOOS == "windows" {
 		ms, err := mem.SwapMemory()
 		if err != nil {
-			printf("mem.SwapMemory error: %v", err)
+			//printf("mem.SwapMemory error: %v", err) //diy win系统没有虚拟内存，就不要发送烦人的警告了，便于调试
 		} else {
 			ret.SwapTotal = ms.Total
 		}

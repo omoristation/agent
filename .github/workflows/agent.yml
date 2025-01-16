@@ -19,9 +19,6 @@ on:
 
 jobs:
   build:
-    permissions: #diy 添加写权限
-        contents: write
-        packages: write
     strategy:
       fail-fast: true
       matrix:
