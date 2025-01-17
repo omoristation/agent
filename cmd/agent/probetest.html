@@ -161,7 +161,17 @@
             }
             function calculateMaxRange(speed){ //自动适用最高网速的进度条 1 Mbps = 1*1000*1000/8 = 125000 字节/秒（因为 8 bits = 1 byte）
                 const byte = 125000;
-                const ranges = [10 * byte, 50 * byte, 100 * byte, 500 * byte, 1000 * byte, 5000 * byte, 10000 * byte, 50000 * byte, 100000 * byte];
+                const ranges = [
+                    //10 * byte,
+                    //50 * byte,
+                    100 * byte,
+                    //500 * byte,
+                    1000 * byte,
+                    //5000 * byte,
+                    10000 * byte,
+                    //50000 * byte,
+                    100000 * byte
+                ];
                 let result = ranges[0]; // 因为最终目的是作为分母，所以不能为0，需要设置默认10m
                 for (let range of ranges) {
                     if (speed <= range) {
@@ -175,7 +185,7 @@
                 var day=Math.floor(s/(24*3600)); // Math.floor()向下取整
                 var hour=Math.floor((s-day*24*3600)/3600);
                 var minute=Math.floor((s-day*24*3600-hour*3600)/60);
-                var second=s-day*24*3600-hour*3600-minute*60;
+                //var second=s-day*24*3600-hour*3600-minute*60;
                 return day+"/"+hour+"/"+minute;
             }
             function getbasicData(){
