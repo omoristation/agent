@@ -27,7 +27,7 @@ var (
 	Version     string
 	agentConfig *model.AgentConfig
 
-	printf = logger.DefaultLogger.Printf
+	printf = logger.Printf
 )
 
 var (
@@ -61,7 +61,7 @@ var statDataFetchAttempts = map[uint8]uint8{
 }
 
 var (
-	updateTempStatus = new(atomic.Bool)
+	updateTempStatus atomic.Bool
 	stateLock        sync.Mutex
 )
 
@@ -89,6 +89,7 @@ func GetHost() *model.Host {
 		ret.PlatformVersion = hi.PlatformVersion
 		ret.Arch = hi.KernelArch
 		ret.BootTime = hi.BootTime
+		cachedBootTime = time.Unix(int64(hi.BootTime), 0)
 	}
 
 	ctxCpu := context.WithValue(context.Background(), cpu.CPUHostKey, cpuType)
@@ -118,8 +119,6 @@ func GetHost() *model.Host {
 			ret.SwapTotal = ms.Total
 		}
 	}
-
-	cachedBootTime = time.Unix(int64(hi.BootTime), 0)
 
 	ret.Version = Version
 

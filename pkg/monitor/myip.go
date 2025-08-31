@@ -23,14 +23,29 @@ var (
 	CustomEndpoints               []string
 	GeoQueryIP, CachedCountryCode string
 	GeoQueryIPChanged             bool = true
-	retryTimes                    int
-	httpClientV4                  = util.NewSingleStackHTTPClient(time.Second*20, time.Second*5, time.Second*10, false)
-	httpClientV6                  = util.NewSingleStackHTTPClient(time.Second*20, time.Second*5, time.Second*10, true)
+	httpClientV4                       = util.NewSingleStackHTTPClient(time.Second*20, time.Second*5, time.Second*10, false)
+	httpClientV6                       = util.NewSingleStackHTTPClient(time.Second*20, time.Second*5, time.Second*10, true)
+
+	retryTimes      int
+	failedStartedAt time.Time
+	latestRetryAt   time.Time
 )
 
 // UpdateIP 按设置时间间隔更新IP地址的缓存
 func FetchIP(useIPv6CountryCode bool) *pb.GeoIP {
-	logger.DefaultLogger.Println("正在更新本地缓存IP信息")
+	logger.Println("正在更新本地缓存IP信息")
+
+	if retryTimes > 2 && time.Now().Before(latestRetryAt.Add(latestRetryAt.Sub(failedStartedAt)*time.Duration(2))) {
+		logger.Println("IP地址获取失败次数过多，fallback到agent连接IP")
+		return &pb.GeoIP{
+			Use6: false,
+			Ip: &pb.IP{
+				Ipv4: "",
+				Ipv6: "",
+			},
+		}
+	}
+
 	wg := new(sync.WaitGroup)
 	wg.Add(2)
 	var ipv4, ipv6 string
@@ -69,19 +84,14 @@ func FetchIP(useIPv6CountryCode bool) *pb.GeoIP {
 				Ipv6: ipv6,
 			},
 		}
-	} else {
-		if retryTimes < 3 {
-			retryTimes++
-		} else {
-			// fallback to connecting IP
-			return &pb.GeoIP{
-				Use6: false,
-				Ip: &pb.IP{
-					Ipv4: "",
-					Ipv6: "",
-				},
-			}
-		}
+	}
+
+	retryTimes++
+	now := time.Now()
+	latestRetryAt = now
+
+	if retryTimes == 1 {
+		failedStartedAt = now
 	}
 
 	return nil
@@ -93,11 +103,11 @@ func fetchIP(servers []string, isV6 bool) string {
 	var err error
 
 	// 双栈支持参差不齐，不能随机请求，有些 IPv6 取不到 IP
-	for i := 0; i < len(servers); i++ {
+	for _, server := range servers {
 		if isV6 {
-			resp, err = httpGetWithUA(httpClientV6, servers[i])
+			resp, err = httpGetWithUA(httpClientV6, server)
 		} else {
-			resp, err = httpGetWithUA(httpClientV4, servers[i])
+			resp, err = httpGetWithUA(httpClientV4, server)
 		}
 		// 遇到单栈机器提前退出
 		if err != nil && strings.Contains(err.Error(), "no route to host") {

@@ -6,16 +6,16 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/hashicorp/go-uuid"
 	"github.com/knadh/koanf/providers/env"
 	"github.com/knadh/koanf/providers/file"
 	"github.com/knadh/koanf/v2"
 	"sigs.k8s.io/yaml"
-
-	"github.com/nezhahq/agent/pkg/util"
 )
 
+//go:generate go run gen/gen.go -type=AgentConfig
 type AgentConfig struct {
 	Debug bool `koanf:"debug" json:"debug"`
 
@@ -33,7 +33,7 @@ type AgentConfig struct {
 	DisableAutoUpdate           bool            `koanf:"disable_auto_update" json:"disable_auto_update"`         // 关闭自动更新
 	DisableForceUpdate          bool            `koanf:"disable_force_update" json:"disable_force_update"`       // 关闭强制更新
 	DisableCommandExecute       bool            `koanf:"disable_command_execute" json:"disable_command_execute"` // 关闭命令执行
-	ReportDelay                 int             `koanf:"report_delay" json:"report_delay"`                       // 报告间隔
+	ReportDelay                 uint32          `koanf:"report_delay" json:"report_delay"`                       // 报告间隔
 	TLS                         bool            `koanf:"tls" json:"tls"`                                         // 是否使用TLS加密传输至服务端
 	InsecureTLS                 bool            `koanf:"insecure_tls" json:"insecure_tls"`                       // 是否禁用证书检查
 	UseIPv6CountryCode          bool            `koanf:"use_ipv6_country_code" json:"use_ipv6_country_code"`     // 默认优先展示IPv6旗帜
@@ -42,7 +42,7 @@ type AgentConfig struct {
 	DisableSendQuery            bool            `koanf:"disable_send_query" json:"disable_send_query"`           // 关闭发送TCP/ICMP/HTTP请求
 	IPReportPeriod              uint32          `koanf:"ip_report_period" json:"ip_report_period"`               // IP上报周期
 	SelfUpdatePeriod            uint32          `koanf:"self_update_period" json:"self_update_period"`           // 自动更新周期
-	CustomIPApi                 []string        `koanf:"custom_ip_api" json:"custom_ip_api,omitempty"`           // 自定义 IP API
+	CustomIPApi                 []string        `koanf:"custom_ip_api" json:"custom_ip_api,omitempty"`           // 自定义 IP API                      // 重载间隔
 	ProbeTestPort               uint32          `koanf:"probe_test_port" json:"probe_test_port"`                 // 探针测试端口 //diy
 
 	k        *koanf.Koanf `json:"-"`
@@ -53,7 +53,7 @@ type AgentConfig struct {
 func (c *AgentConfig) Read(path string) error {
 	c.k = koanf.New("")
 	c.filePath = path
-	saveOnce := util.OnceValue(c.Save)
+	saveOnce := sync.OnceValue(c.Save)
 
 	if _, err := os.Stat(path); err == nil {
 		err = c.k.Load(file.Provider(path), new(kubeyaml))
@@ -76,43 +76,20 @@ func (c *AgentConfig) Read(path string) error {
 		return err
 	}
 
-	if c.ReportDelay == 0 {
-		c.ReportDelay = 3
-	}
-
-	if c.IPReportPeriod == 0 {
-		c.IPReportPeriod = 1800
-	} else if c.IPReportPeriod < 30 {
-		c.IPReportPeriod = 30
-	}
-
-	if c.Server == "" {
-		return errors.New("server address should not be empty")
-	}
-
-	if c.ClientSecret == "" {
-		return errors.New("client_secret must be specified")
-	}
-
-	if c.ReportDelay < 1 || c.ReportDelay > 4 {
-		return errors.New("report-delay ranges from 1-4")
-	}
 	//diy 设置探针测试默认端口 todo:新加入机器从服务端创建uuid，重装机器如果有相同ip存在数据库，就重复利用
 	if c.ProbeTestPort == 0 {
 		c.ProbeTestPort = 2080
 	}
-
 	if c.UUID == "" {
 		if uuid, err := uuid.GenerateUUID(); err == nil {
 			c.UUID = uuid
-			return saveOnce()
+			defer saveOnce()
 		} else {
 			return fmt.Errorf("generate UUID failed: %v", err)
 		}
 	}
-	
 
-	return nil
+	return ValidateConfig(c, false)
 }
 
 func (c *AgentConfig) Save() error {
@@ -127,6 +104,38 @@ func (c *AgentConfig) Save() error {
 	}
 
 	return os.WriteFile(c.filePath, data, 0600)
+}
+
+func ValidateConfig(c *AgentConfig, isRemoteEdit bool) error {
+	if c.ReportDelay == 0 {
+		c.ReportDelay = 3
+	}
+
+	if c.IPReportPeriod == 0 {
+		c.IPReportPeriod = 1800
+	} else if c.IPReportPeriod < 30 {
+		c.IPReportPeriod = 30
+	}
+
+	if c.ReportDelay < 1 || c.ReportDelay > 4 {
+		return errors.New("report-delay ranges from 1-4")
+	}
+
+	if !isRemoteEdit {
+		if c.Server == "" {
+			return errors.New("server address should not be empty")
+		}
+
+		if c.ClientSecret == "" {
+			return errors.New("client_secret must be specified")
+		}
+
+		if _, err := uuid.ParseUUID(c.UUID); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 type kubeyaml struct{}

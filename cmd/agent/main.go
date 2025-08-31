@@ -3,21 +3,20 @@ package main
 import (
 	"bytes"
 	"context"
-	"crypto/md5"
 	"crypto/tls"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"embed" //diy
 	"io/ioutil" //diy
 	"strconv" //diy
-	"encoding/json" //diy
 	"log"
 	"math/rand"
 	"net"
 	"net/http"
-	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -25,11 +24,9 @@ import (
 	"time"
 
 	"github.com/blang/semver"
-	"github.com/ebi-yade/altsvc-go"
 	"github.com/nezhahq/go-github-selfupdate/selfupdate"
 	"github.com/nezhahq/service"
 	ping "github.com/prometheus-community/pro-bing"
-	"github.com/quic-go/quic-go/http3"
 	utls "github.com/refraction-networking/utls"
 	"github.com/shirou/gopsutil/v4/host"
 	"github.com/urfave/cli/v2"
@@ -41,6 +38,7 @@ import (
 	"github.com/nezhahq/agent/cmd/agent/commands"
 	"github.com/nezhahq/agent/model"
 	fm "github.com/nezhahq/agent/pkg/fm"
+	"github.com/nezhahq/agent/pkg/fsnotifyx"
 	"github.com/nezhahq/agent/pkg/logger"
 	"github.com/nezhahq/agent/pkg/monitor"
 	"github.com/nezhahq/agent/pkg/processgroup"
@@ -63,8 +61,9 @@ var (
 	lastReportHostInfo    time.Time
 	lastReportIPInfo      time.Time
 
-	hostStatus = new(atomic.Bool)
-	ipStatus   = new(atomic.Bool)
+	hostStatus   atomic.Bool
+	ipStatus     atomic.Bool
+	reloadStatus atomic.Bool
 
 	dnsResolver = &net.Resolver{PreferGo: true}
 	httpClient  = &http.Client{
@@ -73,26 +72,21 @@ var (
 		},
 		Timeout: time.Second * 30,
 	}
-	httpClient3 = &http.Client{
-		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			return http.ErrUseLastResponse
-		},
-		Timeout:   time.Second * 30,
-		Transport: &http3.RoundTripper{},
-	}
+
+	reloadSigChan = make(chan struct{})
 )
 
 var (
-	println = logger.DefaultLogger.Println
-	printf  = logger.DefaultLogger.Printf
+	println = logger.Println
+	printf  = logger.Printf
 )
 
 const (
 	delayWhenError = time.Second * 10 // Agent 重连间隔
 	networkTimeOut = time.Second * 5  // 普通网络超时
 
-	minUpdateInterval = 30
-	maxUpdateInterval = 90
+	minUpdateInterval = 1440
+	maxUpdateInterval = 2880
 
 	binaryName = "nezha-agent"
 )
@@ -108,11 +102,10 @@ func setEnv() {
 		if len(agentConfig.DNS) > 0 {
 			dnsServers = agentConfig.DNS
 		}
-		index := int(time.Now().Unix()) % int(len(dnsServers))
 		var conn net.Conn
 		var err error
-		for i := 0; i < len(dnsServers); i++ {
-			conn, err = d.DialContext(ctx, "udp", dnsServers[util.RotateQueue1(index, i, len(dnsServers))])
+		for _, server := range util.RangeRnd(dnsServers) {
+			conn, err = d.DialContext(ctx, "udp", server)
 			if err == nil {
 				return conn, nil
 			}
@@ -123,7 +116,7 @@ func setEnv() {
 	http.DefaultClient.Timeout = time.Second * 30
 	httpClient.Transport = utlsx.NewUTLSHTTPRoundTripperWithProxy(
 		utls.HelloChrome_Auto, new(utls.Config),
-		http.DefaultTransport, nil, &headers,
+		http.DefaultTransport, nil, headers,
 	)
 }
 
@@ -245,18 +238,11 @@ func run() {
 		ClientUUID:   agentConfig.UUID,
 	}
 
-	// 下载远程命令执行需要的终端
-	if !agentConfig.DisableCommandExecute {
-		go func() {
-			if err := pty.DownloadDependency(); err != nil {
-				printf("pty 下载依赖失败: %v", err)
-			}
-		}()
-	}
-
 	// 定时检查更新
 	if _, err := semver.Parse(version); err == nil && !agentConfig.DisableAutoUpdate {
-		doSelfUpdate(true)
+		if doExit := doSelfUpdate(true); doExit {
+			os.Exit(1)
+		}
 		go func() {
 			var interval time.Duration
 			if agentConfig.SelfUpdatePeriod > 0 {
@@ -265,11 +251,12 @@ func run() {
 				interval = time.Duration(rand.Intn(maxUpdateInterval-minUpdateInterval)+minUpdateInterval) * time.Minute
 			}
 			for range time.Tick(interval) {
-				doSelfUpdate(true)
+				if doExit := doSelfUpdate(true); doExit {
+					os.Exit(1)
+				}
 			}
 		}()
 	}
-
 	//diy web测速
 	go func() {
 		http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
@@ -390,7 +377,6 @@ func run() {
 
 	retry := func() {
 		initialized = false
-		println("Error to close connection ...")
 		if conn != nil {
 			conn.Close()
 		}
@@ -416,6 +402,7 @@ func run() {
 			continue
 		}
 		client = pb.NewNezhaServiceClient(conn)
+		printf("Connection to %s established", agentConfig.Server)
 
 		timeOutCtx, cancel := context.WithTimeout(context.Background(), networkTimeOut)
 		dashboardBootTimeReceipt, err = client.ReportSystemInfo2(timeOutCtx, monitor.GetHost().PB())
@@ -426,38 +413,43 @@ func run() {
 			continue
 		}
 		cancel()
+
 		geoipReported = geoipReported && prevDashboardBootTime > 0 && dashboardBootTimeReceipt.GetData() == prevDashboardBootTime
 		prevDashboardBootTime = dashboardBootTimeReceipt.GetData()
 		initialized = true
 
-		errCh := make(chan error)
+		wCtx, wCancel := context.WithCancel(context.Background())
 
 		// 执行 Task
-		tasks, err := client.RequestTask(context.Background())
+		tasks, err := doWithTimeout(func() (pb.NezhaService_RequestTaskClient, error) {
+			return client.RequestTask(wCtx)
+		}, networkTimeOut)
 		if err != nil {
 			printf("请求任务失败: %v", err)
+			wCancel()
 			retry()
 			continue
 		}
-		go receiveTasksDaemon(tasks, errCh)
+		go receiveTasksDaemon(tasks, wCancel)
 
-		reportState, err := client.ReportSystemState(context.Background())
+		reportState, err := doWithTimeout(func() (pb.NezhaService_ReportSystemStateClient, error) {
+			return client.ReportSystemState(wCtx)
+		}, networkTimeOut)
 		if err != nil {
 			printf("上报状态信息失败: %v", err)
+			wCancel()
 			retry()
 			continue
 		}
-		go reportStateDaemon(reportState, errCh)
+		go reportStateDaemon(reportState, wCancel)
 
-		for i := 0; i < 2; i++ {
-			err = <-errCh
-			if i == 0 {
-				tasks.CloseSend()
-				reportState.CloseSend()
-			}
-			printf("worker exit to main: %v", err)
+		select {
+		case <-reloadSigChan:
+			println("Reloading...")
+			wCancel()
+		case <-wCtx.Done():
+			println("Worker exit...")
 		}
-		close(errCh)
 
 		retry()
 	}
@@ -471,7 +463,7 @@ func runService(action string, path string) {
 	args := []string{"-c", path}
 	name := filepath.Base(executablePath)
 	if path != defaultConfigPath && path != "" {
-		hex := fmt.Sprintf("%x", md5.Sum([]byte(path)))[:7]
+		hex := util.MD5Sum(path)[:7]
 		name = fmt.Sprintf("%s-%s", name, hex)
 	}
 
@@ -496,7 +488,7 @@ func runService(action string, path string) {
 	}
 	prg.Service = s
 
-	serviceLogger, err := s.Logger(nil)
+	serviceLogger, err := logger.NewNezhaServiceLogger(s, nil)
 	if err != nil {
 		printf("获取 service logger 时出错: %+v", err)
 		logger.InitDefaultLogger(agentConfig.Debug, service.ConsoleLogger)
@@ -522,17 +514,20 @@ func runService(action string, path string) {
 
 	err = s.Run()
 	if err != nil {
-		logger.DefaultLogger.Error(err)
+		logger.Error(err)
 	}
 }
 
-func receiveTasksDaemon(tasks pb.NezhaService_RequestTaskClient, errCh chan<- error) {
+func receiveTasksDaemon(tasks pb.NezhaService_RequestTaskClient, cancel context.CancelFunc) {
 	var task *pb.Task
 	var err error
 	for {
-		task, err = tasks.Recv()
+		task, err = doWithTimeout(func() (*pb.Task, error) {
+			return tasks.Recv()
+		}, time.Second*30)
 		if err != nil {
-			errCh <- fmt.Errorf("receiveTasks exit: %v", err)
+			printf("receiveTasks exit: %v", err)
+			cancel()
 			return
 		}
 		go func(t *pb.Task) {
@@ -544,7 +539,8 @@ func receiveTasksDaemon(tasks pb.NezhaService_RequestTaskClient, errCh chan<- er
 			result := doTask(t)
 			if result != nil {
 				if err := tasks.Send(result); err != nil {
-					printf("send task result error: %v", err)
+					printf("send task result exit: %v", err)
+					cancel()
 				}
 			}
 		}(task)
@@ -575,6 +571,10 @@ func doTask(task *pb.Task) *pb.TaskResult {
 	case model.TaskTypeFM:
 		handleFMTask(task)
 		return nil
+	case model.TaskTypeReportConfig:
+		handleReportConfigTask(&result)
+	case model.TaskTypeApplyConfig:
+		handleApplyConfigTask(task)
 	case model.TaskTypeKeepalive:
 	default:
 		printf("不支持的任务: %v", task)
@@ -584,12 +584,13 @@ func doTask(task *pb.Task) *pb.TaskResult {
 }
 
 // reportStateDaemon 向server上报状态信息
-func reportStateDaemon(stateClient pb.NezhaService_ReportSystemStateClient, errCh chan<- error) {
+func reportStateDaemon(stateClient pb.NezhaService_ReportSystemStateClient, cancel context.CancelFunc) {
 	var err error
 	for {
 		lastReportHostInfo, lastReportIPInfo, err = reportState(stateClient, lastReportHostInfo, lastReportIPInfo)
 		if err != nil {
-			errCh <- fmt.Errorf("reportStateDaemon exit: %v", err)
+			printf("reportStateDaemon exit: %v", err)
+			cancel()
 			return
 		}
 		time.Sleep(time.Second * time.Duration(agentConfig.ReportDelay))
@@ -597,12 +598,17 @@ func reportStateDaemon(stateClient pb.NezhaService_ReportSystemStateClient, errC
 }
 
 func reportState(statClient pb.NezhaService_ReportSystemStateClient, host, ip time.Time) (time.Time, time.Time, error) {
+	if statClient.Context().Err() != nil {
+		return host, ip, statClient.Context().Err()
+	}
 	if initialized {
 		monitor.TrackNetworkSpeed()
-		if err := statClient.Send(monitor.GetState(agentConfig.SkipConnectionCount, agentConfig.SkipProcsCount).PB()); err != nil {
+		if _, err := doWithTimeout(func() (*pb.Receipt, error) {
+			return nil, statClient.Send(monitor.GetState(agentConfig.SkipConnectionCount, agentConfig.SkipProcsCount).PB())
+		}, time.Second*10); err != nil {
 			return host, ip, err
 		}
-		_, err := statClient.Recv()
+		_, err := doWithTimeout(statClient.Recv, time.Second*10)
 		if err != nil {
 			return host, ip, err
 		}
@@ -628,15 +634,16 @@ func reportHost() bool {
 		return false
 	}
 	defer hostStatus.Store(false)
-
 	if client != nil && initialized {
-		receipt, err := client.ReportSystemInfo2(context.Background(), monitor.GetHost().PB())
-		if err == nil {
-			geoipReported = receipt.GetData() == prevDashboardBootTime
-			prevDashboardBootTime = receipt.GetData()
+		receipt, err := doWithTimeout(func() (*pb.Uint64Receipt, error) {
+			return client.ReportSystemInfo2(context.Background(), monitor.GetHost().PB())
+		}, time.Second*10)
+		if err != nil {
+			printf("ReportSystemInfo2 error: %v", err)
+			return false
 		}
+		geoipReported = geoipReported && prevDashboardBootTime > 0 && receipt.GetData() == prevDashboardBootTime
 	}
-
 	return true
 }
 
@@ -646,33 +653,105 @@ func reportGeoIP(use6, forceUpdate bool) bool {
 	}
 	defer ipStatus.Store(false)
 
-	if client != nil && initialized {
-		pbg := monitor.FetchIP(use6)
-		if pbg == nil {
-			return false
-		}
-		if !monitor.GeoQueryIPChanged && !forceUpdate {
-			return true
-		}
-		geoip, err := client.ReportGeoIP(context.Background(), pbg)
-		if err == nil {
-			monitor.CachedCountryCode = geoip.GetCountryCode()
-			monitor.GeoQueryIPChanged = false
-		}
+	if client == nil || !initialized {
+		return false
 	}
+
+	pbg := monitor.FetchIP(use6)
+	if pbg == nil {
+		return false
+	}
+
+	if !monitor.GeoQueryIPChanged && !forceUpdate {
+		return true
+	}
+
+	geoip, err := doWithTimeout(func() (*pb.GeoIP, error) {
+		return client.ReportGeoIP(context.Background(), pbg)
+	}, time.Second*10)
+	if err != nil {
+		return false
+	}
+
+	prevDashboardBootTime = geoip.GetDashboardBootTime()
+
+	monitor.CachedCountryCode = geoip.GetCountryCode()
+	monitor.GeoQueryIPChanged = false
 
 	return true
 }
 
 // doSelfUpdate 执行更新检查 如果更新成功则会结束进程
-func doSelfUpdate(useLocalVersion bool) {
+func doSelfUpdate(useLocalVersion bool) (exit bool) {
 	v := semver.MustParse("0.1.0")
 	if useLocalVersion {
-		v = semver.MustParse(version)
+		vr, err := semver.Parse(version)
+		if err != nil {
+			printf("failed to parse current version string: %v", err)
+			return
+		}
+		cmd := exec.Command(executablePath, "-v")
+		vb, err := cmd.Output()
+		if err != nil {
+			printf("failed to retrieve current executable version: %v", err)
+			return
+		}
+		vraw := strings.Split(strings.TrimSpace(string(vb)), " ")
+		vstr := vraw[len(vraw)-1]
+		v, err = semver.Parse(vstr)
+		if err != nil {
+			printf("failed to parse executable version string: %v", err)
+			return
+		}
+		if !vr.Equals(v) {
+			printf("executable version differs from current version, exiting to re-check update...")
+			exit = true
+			return
+		}
 	}
+
+	execHash := util.MD5Sum(executablePath)[:7]
+	statName := fmt.Sprintf("agent-%s.stat", execHash)
+	tmpDir := filepath.Join(os.TempDir(), binaryName)
+	if err := os.MkdirAll(tmpDir, 0755); err != nil {
+		printf("failed to create temp dir: %v", err)
+		return
+	}
+
+	statFile := filepath.Join(tmpDir, statName)
+	if _, err := os.Stat(statFile); err == nil {
+		printf("found self-update stat file, waiting for another process to finish update...")
+		if fErr := fsnotifyx.ExitOnDeleteFile(context.Background(), printf, statFile); fErr != nil {
+			if errors.Is(fErr, fsnotifyx.ErrTimeout) {
+				os.Remove(statFile) // try to remove stat file
+			}
+			printf("failed to monitor path of stat file: %v", fErr)
+			return
+		}
+		exit = true
+		return
+	} else {
+		if !errors.Is(err, os.ErrNotExist) {
+			printf("failed to retrieve self-update stat at %s", statFile)
+			return
+		}
+	}
+
+	stat, err := os.OpenFile(statFile, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+	if err != nil {
+		printf("failed to create self-update stat file: %v", err)
+		return
+	}
+
+	defer func() {
+		stat.Close()
+		if err := os.Remove(statFile); err != nil {
+			printf("remove stat failed: %v", err)
+		}
+	}()
+
 	printf("检查更新: %v", v)
 	var latest *selfupdate.Release
-	var err error
 	//if monitor.CachedCountryCode != "cn" && !agentConfig.UseGiteeToUpgrade { //diy
 		updater, erru := selfupdate.NewUpdater(selfupdate.Config{
 			BinaryName: binaryName,
@@ -692,14 +771,17 @@ func doSelfUpdate(useLocalVersion bool) {
 		}
 		latest, err = updater.UpdateSelf(v, "naibahq/agent")
 	}*/
+
 	if err != nil {
 		printf("更新失败: %v", err)
 		return
 	}
+
 	if !latest.Version.Equals(v) {
 		printf("已经更新至: %v, 正在结束进程", latest.Version)
-		os.Exit(1)
+		exit = true
 	}
+	return
 }
 
 func handleUpgradeTask(*pb.Task, *pb.TaskResult) {
@@ -725,12 +807,10 @@ func handleTcpPingTask(task *pb.Task, result *pb.TaskResult) {
 		result.Data = err.Error()
 		return
 	}
-	if strings.IndexByte(ipAddr, ':') != -1 {
-		ipAddr = fmt.Sprintf("[%s]", ipAddr)
-	}
-	printf("TCP-Ping Task: Pinging %s:%s", ipAddr, port)
+	addr := net.JoinHostPort(ipAddr, port)
+	printf("TCP-Ping Task: Pinging %s", addr)
 	start := time.Now()
-	conn, err := net.DialTimeout("tcp", fmt.Sprintf("%s:%s", ipAddr, port), time.Second*10)
+	conn, err := net.DialTimeout("tcp", addr, time.Second*10)
 	if err != nil {
 		result.Data = err.Error()
 	} else {
@@ -781,10 +861,6 @@ func handleHttpGetTask(task *pb.Task, result *pb.TaskResult) {
 	taskUrl := task.GetData()
 	resp, err := httpClient.Get(taskUrl)
 	printf("HTTP-GET Task: %s", taskUrl)
-	checkHttpResp(taskUrl, start, resp, err, result)
-}
-
-func checkHttpResp(taskUrl string, start time.Time, resp *http.Response, err error, result *pb.TaskResult) {
 	if err == nil {
 		defer resp.Body.Close()
 		_, err = io.Copy(io.Discard, resp.Body)
@@ -793,7 +869,7 @@ func checkHttpResp(taskUrl string, start time.Time, resp *http.Response, err err
 		// 检查 HTTP Response 状态
 		result.Delay = float32(time.Since(start).Microseconds()) / 1000.0
 		if resp.StatusCode > 399 || resp.StatusCode < 200 {
-			err = errors.New("\n应用错误：" + resp.Status)
+			err = errors.New("\n应用错误: " + resp.Status)
 		}
 	}
 	if err == nil {
@@ -802,68 +878,11 @@ func checkHttpResp(taskUrl string, start time.Time, resp *http.Response, err err
 			c := resp.TLS.PeerCertificates[0]
 			result.Data = c.Issuer.CommonName + "|" + c.NotAfter.String()
 		}
-		altSvc := resp.Header.Get("Alt-Svc")
-		if altSvc != "" {
-			checkAltSvc(start, altSvc, taskUrl, result)
-		} else {
-			result.Successful = true
-		}
+		result.Successful = true
 	} else {
 		// HTTP 请求失败
 		result.Data = err.Error()
 	}
-}
-
-func checkAltSvc(start time.Time, altSvcStr string, taskUrl string, result *pb.TaskResult) {
-	altSvcList, err := altsvc.Parse(altSvcStr)
-	if err != nil {
-		result.Data = err.Error()
-		result.Successful = false
-		return
-	}
-
-	parsedUrl, _ := url.Parse(taskUrl)
-	originalHost := parsedUrl.Hostname()
-	originalPort := parsedUrl.Port()
-	if originalPort == "" {
-		switch parsedUrl.Scheme {
-		case "http":
-			originalPort = "80"
-		case "https":
-			originalPort = "443"
-		}
-	}
-
-	altAuthorityHost := ""
-	altAuthorityPort := ""
-	altAuthorityProtocol := ""
-	for _, altSvc := range altSvcList {
-		altAuthorityPort = altSvc.AltAuthority.Port
-		if altSvc.AltAuthority.Host != "" {
-			altAuthorityHost = altSvc.AltAuthority.Host
-			altAuthorityProtocol = altSvc.ProtocolID
-			break
-		}
-	}
-	if altAuthorityHost == "" {
-		altAuthorityHost = originalHost
-	}
-	if altAuthorityHost == originalHost && altAuthorityPort == originalPort {
-		result.Successful = true
-		return
-	}
-
-	altAuthorityUrl := "https://" + altAuthorityHost + ":" + altAuthorityPort + "/"
-	req, _ := http.NewRequest("GET", altAuthorityUrl, nil)
-	req.Host = originalHost
-
-	client := httpClient
-	if strings.HasPrefix(altAuthorityProtocol, "h3") {
-		client = httpClient3
-	}
-	resp, err := client.Do(req)
-
-	checkHttpResp(altAuthorityUrl, start, resp, err, result)
 }
 
 func handleCommandTask(task *pb.Task, result *pb.TaskResult) {
@@ -910,6 +929,67 @@ func handleCommandTask(task *pb.Task, result *pb.TaskResult) {
 	result.Delay = float32(time.Since(startedAt).Seconds())
 }
 
+func handleReportConfigTask(result *pb.TaskResult) {
+	if agentConfig.DisableCommandExecute {
+		result.Data = "此 Agent 已禁止命令执行"
+		return
+	}
+
+	if reloadStatus.Load() {
+		result.Data = "another reload is in process"
+		return
+	}
+
+	println("Executing Report Config Task")
+
+	c, err := json.Marshal(agentConfig)
+	if err != nil {
+		result.Data = err.Error()
+		return
+	}
+
+	result.Data = string(c)
+	result.Successful = true
+}
+
+func handleApplyConfigTask(task *pb.Task) {
+	if agentConfig.DisableCommandExecute {
+		return
+	}
+
+	if !reloadStatus.CompareAndSwap(false, true) {
+		return
+	}
+
+	println("Executing Apply Config Task")
+
+	tmpConfig := agentConfig
+	if err := json.Unmarshal([]byte(task.GetData()), &tmpConfig); err != nil {
+		printf("Parsing Config failed: %v", err)
+		reloadStatus.Store(false)
+		return
+	}
+
+	if err := model.ValidateConfig(&tmpConfig, true); err != nil {
+		printf("Validate Config failed: %v", err)
+		reloadStatus.Store(false)
+		return
+	}
+
+	println("Will reload workers in 10 seconds")
+	time.AfterFunc(10*time.Second, func() {
+		println("Applying new configuration...")
+		agentConfig := tmpConfig
+		agentConfig.Save()
+		geoipReported = false
+		logger.SetEnable(agentConfig.Debug)
+		monitor.InitConfig(&agentConfig)
+		monitor.CustomEndpoints = agentConfig.CustomIPApi
+		reloadStatus.Store(false)
+		reloadSigChan <- struct{}{}
+	})
+}
+
 type WindowSize struct {
 	Cols uint32
 	Rows uint32
@@ -921,7 +1001,7 @@ func handleTerminalTask(task *pb.Task) {
 		return
 	}
 	var terminal model.TerminalTask
-	err := util.Json.Unmarshal([]byte(task.GetData()), &terminal)
+	err := json.Unmarshal([]byte(task.GetData()), &terminal)
 	if err != nil {
 		printf("Terminal 任务解析错误: %v", err)
 		return
@@ -984,7 +1064,7 @@ func handleTerminalTask(task *pb.Task) {
 		case 0:
 			tty.Write(remoteData.Data[1:])
 		case 1:
-			decoder := util.Json.NewDecoder(strings.NewReader(string(remoteData.Data[1:])))
+			decoder := json.NewDecoder(strings.NewReader(string(remoteData.Data[1:])))
 			var resizeMessage WindowSize
 			err := decoder.Decode(&resizeMessage)
 			if err != nil {
@@ -1002,7 +1082,7 @@ func handleNATTask(task *pb.Task) {
 	}
 
 	var nat model.TaskNAT
-	err := util.Json.Unmarshal([]byte(task.GetData()), &nat)
+	err := json.Unmarshal([]byte(task.GetData()), &nat)
 	if err != nil {
 		printf("NAT 任务解析错误: %v", err)
 		return
@@ -1068,7 +1148,7 @@ func handleFMTask(task *pb.Task) {
 		return
 	}
 	var fmTask model.TaskFM
-	err := util.Json.Unmarshal([]byte(task.GetData()), &fmTask)
+	err := json.Unmarshal([]byte(task.GetData()), &fmTask)
 	if err != nil {
 		printf("FM 任务解析错误: %v", err)
 		return
@@ -1127,20 +1207,34 @@ func lookupIP(hostOrIp string) (string, error) {
 }
 
 func ioStreamKeepAlive(ctx context.Context, stream pb.NezhaService_IOStreamClient) {
-	// Can be replaced with time.Tick after upgrading to Go 1.23+
-	ticker := time.NewTicker(30 * time.Second)
-	defer ticker.Stop()
+	ticker := time.Tick(30 * time.Second)
 
 	for {
 		select {
 		case <-ctx.Done():
-			log.Printf("IOStream KeepAlive stopped: %v", ctx.Err())
+			printf("IOStream KeepAlive stopped: %v", ctx.Err())
 			return
-		case <-ticker.C:
+		case <-ticker:
 			if err := stream.Send(&pb.IOStreamData{Data: []byte{}}); err != nil {
-				log.Printf("IOStream KeepAlive failed: %v", err)
+				printf("IOStream KeepAlive failed: %v", err)
 				return
 			}
 		}
 	}
+}
+
+func doWithTimeout[T any](fn func() (T, error), timeout time.Duration) (T, error) {
+	timeoutCtx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	var t T
+	var err error
+	go func() {
+		defer cancel()
+		t, err = fn()
+	}()
+	<-timeoutCtx.Done()
+	if timeoutCtx.Err() != context.Canceled {
+		return t, fmt.Errorf("context error: %v, fn err: %v", timeoutCtx.Err(), err)
+	}
+	return t, err
 }

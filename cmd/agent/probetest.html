@@ -28,7 +28,7 @@
             table tr:first-child th:last-child{border-top-right-radius: 8px;}
             table th{padding: 3px 6px; font-weight:bold;background:#dedede;color:#626262;border:1px solid #CCCCCC; text-align:left;}
             table tr{padding: 0;}
-            table td{padding: 6px 6px; border:1px solid #CCCCCC;overflow:hidden;white-space:nowrap;min-width:150px;border-right:0px;border-bottom:0px;}
+            table td{padding: 6px 6px; border:1px solid #CCCCCC;overflow:hidden;white-space:nowrap;min-width:135px;border-right:0px;border-bottom:0px;}
             .page {width: auto; padding: 0px 0px; margin: 0 auto; text-align: left;}
             .button{height:auto;width:auto;color:#ffffff;background-color:#707aece3;font-size:12px;font-weight:normal;font-family:Arial;border:0px solid #dcdcdc;cursor:pointer;max-width:100px;border-radius: .25rem;display:inline-block;white-space:nowrap;overflow:hidden;}
             .span{height:auto;width:auto;color:#ffffff;background-color:#4d8c2de3;font-weight:normal;border:0px solid #dcdcdc;cursor:pointer;max-width:100px;border-radius: .25rem;display:inline-block;white-space:nowrap;overflow:hidden;margin-bottom:-4px;padding-inline: 4px;}
@@ -124,7 +124,7 @@
                         <td>内存:<span class="memoryUsed"></span>/<span class="memoryTotal"></span>
                             <div class="progress_middle"><div class="progress-bar memUsedPercent"></div><div class="progress-bar memCachedPercent"></div><div class="progress-bar memBuffersPercent"></div></div>
                         </td>
-                        <td>交换:<span class="swapUsed"></span>/<span class="swapTotal"></span>
+                        <td>虚拟:<span class="swapUsed"></span>/<span class="swapTotal"></span>
                             <div class="progress_middle"><div class="progress-bar swapPercent"></div></div>
                         </td>
                         <td>负载:<span class="loadAvg"></span>
@@ -141,23 +141,27 @@
             </table>
         </div>
         <script type="text/javascript">
-            function renderSize(value){ //容量单位
-                if(null==value||value==''||value<0||isNaN(value)){
-                    return "0B"; //Bytes
-                }
-                var unitArr = new Array("B","KB","MB","GB","TB","PB","EB","ZB","YB");
-                var index=0;
-                var srcsize = parseFloat(value);
-                index=Math.floor(Math.log(srcsize)/Math.log(1024));
-                var size =srcsize/Math.pow(1024,index);
-                size=size.toFixed(2);//保留的小数位数
-                return size+unitArr[index];
+            function renderSize(bytes){ //容量单位
+                if (!+bytes) return "0B" //diy 去掉空格 Bytes
+                const k = 1024
+                //const dm = decimals < 0 ? 0 : decimals
+                const decimals = 1
+                const sizes = ["B", "KB", "MB", "GB", "TB", "PB", "EB", "ZB", "YB"] //diy 去掉自作聪明的i
+                const i = Math.floor(Math.log(bytes) / Math.log(k))
+                const value = bytes / Math.pow(k, i) //diy
+                const dm = value >= 100 ? 0 : (decimals < 0 ? 0 : decimals) //diy 如果值>=100，则小数位数设为0，否则使用传入的decimals参数（默认为1）
+                return `${parseFloat((value).toFixed(dm))}${sizes[i]}`
             }
             function formatsize(bytes){ //流量单位单独算 十进制
-                if (!+bytes) return '0bps';
-                var s = ['', 'K', 'M', 'G', 'T', 'P', 'E', 'Z', 'Y'];
-                var e = Math.floor(Math.log(bytes)/Math.log(1000));
-                return (bytes/Math.pow(1024, Math.floor(e))).toFixed(2)+""+s[e]+"bps";
+                if (!+bytes) return '0bps'
+                const k = 1000
+                //const dm = decimals < 0 ? 0 : decimals
+                const decimals = 1
+                var sizes = ['bps', 'Kbps', 'Mbps', 'Gbps', 'Tbps', 'Pbps', 'Ebps', 'Zbps', 'Ybps']
+                var i = Math.floor(Math.log(bytes) / Math.log(k))
+                const value = bytes / Math.pow(k, i) //diy
+                const dm = value >= 100 ? 0 : (decimals < 0 ? 0 : decimals) //diy 如果值>=100，则小数位数设为0，否则使用传入的decimals参数（默认为1）
+                return `${parseFloat((value).toFixed(dm))}${sizes[i]}`
             }
             function calculateMaxRange(speed){ //自动适用最高网速的进度条 1 Mbps = 1*1000*1000/8 = 125000 字节/秒（因为 8 bits = 1 byte）
                 const byte = 125000;
@@ -203,7 +207,7 @@
                     document.querySelector('.swapUsed').innerHTML = renderSize(dataJSON.swap_used);
                     document.querySelector('.swapTotal').innerHTML = renderSize(dataJSON.swap_total);
                     document.querySelector('.swapPercent').style.width = dataJSON.swap_used/dataJSON.swap_total*100 + '%';
-                    document.querySelector('.loadAvg').innerHTML = `${(dataJSON.load1 ?? 0).toFixed(2)}/${(dataJSON.load5 ?? 0).toFixed(2)}/${(dataJSON.load15 ?? 0).toFixed(2)} ${dataJSON.process_count}`;
+                    document.querySelector('.loadAvg').innerHTML = `${(dataJSON.load1 ?? 0).toFixed(1)}/${(dataJSON.load5 ?? 0).toFixed(1)}/${(dataJSON.load15 ?? 0).toFixed(1)} ${dataJSON.process_count}`;
                     document.querySelector('.cpuPercent').style.width = dataJSON.cpu + '%';
                     document.querySelector('.netSent').innerHTML = renderSize(dataJSON.net_out_transfer);
                     document.querySelector('.netRecv').innerHTML = renderSize(dataJSON.net_in_transfer);
