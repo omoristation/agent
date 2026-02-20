@@ -12,7 +12,11 @@ import (
 	"github.com/nezhahq/agent/pkg/util"
 	pb "github.com/nezhahq/agent/proto"
 )
-
+//diy 缓存 IPv4 和 IPv6 地址
+type IPInfo struct {
+	IPv4 string `json:"ipv4"`
+	IPv6 string `json:"ipv6"`
+}
 var (
 	cfList = []string{
 		"https://blog.cloudflare.com/cdn-cgi/trace",
@@ -25,7 +29,7 @@ var (
 	GeoQueryIPChanged             bool = true
 	httpClientV4                       = util.NewSingleStackHTTPClient(time.Second*20, time.Second*5, time.Second*10, false)
 	httpClientV6                       = util.NewSingleStackHTTPClient(time.Second*20, time.Second*5, time.Second*10, true)
-
+	CachedIP IPInfo //diy
 	retryTimes      int
 	failedStartedAt time.Time
 	latestRetryAt   time.Time
@@ -66,6 +70,9 @@ func FetchIP(useIPv6CountryCode bool) *pb.GeoIP {
 		}
 	}()
 	wg.Wait()
+
+	CachedIP.IPv6 = ipv6 //diy
+	CachedIP.IPv4 = ipv4 //diy
 
 	if ipv6 != "" && (useIPv6CountryCode || ipv4 == "") {
 		GeoQueryIPChanged = GeoQueryIP != ipv6 || GeoQueryIPChanged

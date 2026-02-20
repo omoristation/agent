@@ -240,7 +240,7 @@ func run() {
 
 	// 定时检查更新
 	if _, err := semver.Parse(version); err == nil && !agentConfig.DisableAutoUpdate {
-		if doExit := doSelfUpdate(true); doExit {
+		if doSelfUpdate(true) {
 			os.Exit(1)
 		}
 		go func() {
@@ -251,7 +251,7 @@ func run() {
 				interval = time.Duration(rand.Intn(maxUpdateInterval-minUpdateInterval)+minUpdateInterval) * time.Minute
 			}
 			for range time.Tick(interval) {
-				if doExit := doSelfUpdate(true); doExit {
+				if doSelfUpdate(true) {
 					os.Exit(1)
 				}
 			}
@@ -264,12 +264,18 @@ func run() {
 			w.WriteHeader(http.StatusOK)
 			w.Write([]byte("<?xml version=\"1.0\" encoding=\"UTF-8\"?><root></root>"))
 		})
-		http.HandleFunc("/basic", func(w http.ResponseWriter, r *http.Request) {
+		http.HandleFunc(agentConfig.ProbeTestPath+"/basic", func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusOK)
 			//合并Host和State的json
+			ip := monitor.CachedIP
 			host := monitor.GetHost().PB()
 			state := monitor.GetState(agentConfig.SkipConnectionCount, agentConfig.SkipProcsCount).PB()
+
+			ipBytes, err := json.Marshal(ip) // 序列化 JSON
+			if err != nil {
+				log.Fatalf("Failed to marshal ip: %v", err)
+			}
 			hostBytes, err := json.Marshal(host) // 序列化 JSON
 			if err != nil {
 				log.Fatalf("Failed to marshal host: %v", err)
@@ -277,6 +283,11 @@ func run() {
 			stateBytes, err := json.Marshal(state)
 			if err != nil {
 				log.Fatalf("Failed to marshal state: %v", err)
+			}
+
+			var ipmap map[string]interface{} //使用 map 合并 反序列化到 map
+			if err := json.Unmarshal(ipBytes, &ipmap); err != nil {
+				log.Fatalf("Failed to unmarshal ip: %v", err)
 			}
 			var hostmap map[string]interface{} //使用 map 合并 反序列化到 map
 			if err := json.Unmarshal(hostBytes, &hostmap); err != nil {
@@ -286,7 +297,11 @@ func run() {
 			if err := json.Unmarshal(stateBytes, &statemap); err != nil {
 				log.Fatalf("Failed to unmarshal state: %v", err)
 			}
+
 			merged := make(map[string]interface{}) // 合并 map（后者覆盖前者）
+			for k, v := range ipmap {
+				merged[k] = v
+			}
 			for k, v := range hostmap {
 				merged[k] = v
 			}
@@ -300,19 +315,19 @@ func run() {
 			w.Write(mergedBytes)
 		})
 		// 提供静态文件服务(HTML页面)
-		http.HandleFunc("/probetest", func(w http.ResponseWriter, r *http.Request) {
-			//http.ServeFile(w, r, "probetest.html") //debug模式 二进制同目录静态文件 下面把静态文件编译进二进制
-			data, err := probeHTML.ReadFile("probetest.html")
+		http.HandleFunc(agentConfig.ProbeTestPath, func(w http.ResponseWriter, r *http.Request) {
+			http.ServeFile(w, r, "probetest.html") //debug模式 二进制同目录静态文件 下面把静态文件编译进二进制
+			/*data, err := probeHTML.ReadFile("probetest.html")
 			if err != nil {
 				w.WriteHeader(http.StatusInternalServerError)
 				printf("Failed to read embedded probe.html: %v", err)
 				return
 			}
 			w.Header().Set("Content-Type", "text/html")
-			w.Write(data)
+			w.Write(data)*/
 		})
 		// ping
-		http.HandleFunc("/empty", func (w http.ResponseWriter, r *http.Request) {
+		http.HandleFunc(agentConfig.ProbeTestPath+"/empty", func (w http.ResponseWriter, r *http.Request) {
 			_, err := io.Copy(ioutil.Discard, r.Body)
 			if err != nil {
 				w.WriteHeader(http.StatusBadRequest)
@@ -324,7 +339,7 @@ func run() {
 			w.WriteHeader(http.StatusOK)
 		})
 		// download
-		http.HandleFunc("/garbage", func (w http.ResponseWriter, r *http.Request) {
+		http.HandleFunc(agentConfig.ProbeTestPath+"/garbage", func (w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Description", "File Transfer")
 			w.Header().Set("Content-Type", "application/octet-stream")
 			w.Header().Set("Content-Disposition", "attachment; filename=random.dat")
@@ -752,16 +767,8 @@ func doSelfUpdate(useLocalVersion bool) (exit bool) {
 
 	printf("检查更新: %v", v)
 	var latest *selfupdate.Release
-	//if monitor.CachedCountryCode != "cn" && !agentConfig.UseGiteeToUpgrade { //diy
-		updater, erru := selfupdate.NewUpdater(selfupdate.Config{
-			BinaryName: binaryName,
-		})
-		if erru != nil {
-			printf("更新失败: %v", erru)
-			return
-		}
-		latest, err = updater.UpdateSelf(v, "omoristation/agent") //diy
-	/*} else {
+	switch {
+	case agentConfig.UseGiteeToUpgrade:
 		updater, erru := selfupdate.NewGiteeUpdater(selfupdate.Config{
 			BinaryName: binaryName,
 		})
@@ -770,7 +777,46 @@ func doSelfUpdate(useLocalVersion bool) (exit bool) {
 			return
 		}
 		latest, err = updater.UpdateSelf(v, "naibahq/agent")
-	}*/
+	case agentConfig.UseAtomGitToUpgrade:
+		updater, erru := selfupdate.NewAtomGitUpdater(selfupdate.Config{
+			BinaryName: binaryName,
+		})
+		if erru != nil {
+			printf("更新失败: %v", erru)
+			return
+		}
+		latest, err = updater.UpdateSelf(v, "naiba/nezha-agent")
+	case monitor.CachedCountryCode == "un": //diy
+		if rand.Intn(2) == 0 {
+			updater, erru := selfupdate.NewGiteeUpdater(selfupdate.Config{
+				BinaryName: binaryName,
+			})
+			if erru != nil {
+				printf("更新失败: %v", erru)
+				return
+			}
+			latest, err = updater.UpdateSelf(v, "naibahq/agent")
+		} else {
+			updater, erru := selfupdate.NewAtomGitUpdater(selfupdate.Config{
+				BinaryName: binaryName,
+			})
+			if erru != nil {
+				printf("更新失败: %v", erru)
+				return
+			}
+			latest, err = updater.UpdateSelf(v, "naiba/nezha-agent")
+		}
+	default:
+		updater, erru := selfupdate.NewUpdater(selfupdate.Config{
+			BinaryName: binaryName,
+		})
+		if erru != nil {
+			printf("更新失败: %v", erru)
+			return
+		}
+		//latest, err = updater.UpdateSelf(v, "nezhahq/agent") //diy
+		latest, err = updater.UpdateSelf(v, "omoristation/agent")
+	}
 
 	if err != nil {
 		printf("更新失败: %v", err)
@@ -788,7 +834,9 @@ func handleUpgradeTask(*pb.Task, *pb.TaskResult) {
 	if agentConfig.DisableForceUpdate {
 		return
 	}
-	doSelfUpdate(false)
+	if doSelfUpdate(false) {
+		os.Exit(1)
+	}
 }
 
 func handleTcpPingTask(task *pb.Task, result *pb.TaskResult) {
@@ -979,7 +1027,7 @@ func handleApplyConfigTask(task *pb.Task) {
 	println("Will reload workers in 10 seconds")
 	time.AfterFunc(10*time.Second, func() {
 		println("Applying new configuration...")
-		agentConfig := tmpConfig
+		agentConfig = tmpConfig
 		agentConfig.Save()
 		geoipReported = false
 		logger.SetEnable(agentConfig.Debug)

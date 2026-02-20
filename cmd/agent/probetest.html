@@ -31,7 +31,7 @@
             table td{padding: 6px 6px; border:1px solid #CCCCCC;overflow:hidden;white-space:nowrap;min-width:135px;border-right:0px;border-bottom:0px;}
             .page {width: auto; padding: 0px 0px; margin: 0 auto; text-align: left;}
             .button{height:auto;width:auto;color:#ffffff;background-color:#707aece3;font-size:12px;font-weight:normal;font-family:Arial;border:0px solid #dcdcdc;cursor:pointer;max-width:100px;border-radius: .25rem;display:inline-block;white-space:nowrap;overflow:hidden;}
-            .span{height:auto;width:auto;color:#ffffff;background-color:#4d8c2de3;font-weight:normal;border:0px solid #dcdcdc;cursor:pointer;max-width:100px;border-radius: .25rem;display:inline-block;white-space:nowrap;overflow:hidden;margin-bottom:-4px;padding-inline: 4px;}
+            .span{height:auto;width:auto;color:#ffffff;background-color:#4d8c2de3;font-weight:normal;border:0px solid #dcdcdc;cursor:pointer;max-width:300px;border-radius: .25rem;display:inline-block;white-space:nowrap;overflow:hidden;margin-bottom:-4px;padding-inline: 4px;}
             .submit{height:auto;width:auto;color:#ffffff;background-color:#b74e83e3;font-size:12px;font-weight:normal;font-family:Arial;border:0px solid #dcdcdc;cursor:pointer;} 
             .form{margin:0px;display: inline;}
             @media only screen and (max-width:800px) {
@@ -94,12 +94,12 @@
                 height: 100%;
                 position: relative;
             }
-            .netSentSpeedPercent {
+            .netUpSpeedPercent {
                 background-color: #4cd964;
                 height: 100%;
                 position: relative;
             }
-            .netRecvSpeedPercent {
+            .netDownSpeedPercent {
                 background-color: #00BBFF;
                 height: 100%;
                 position: relative;
@@ -112,7 +112,7 @@
                 <thead>
                     <tr>
                         <th colspan="8">
-                            <span class="span hostos" onclick="location.reload(true);"></span> <span class="span hosttime"></span> <span class="span hostconn"></span> <input title="测速" type="button" class="button" id="startStopBtn" onclick="startStop()" value="Speed"> <span id="pingText"></span><span id="jitText"></span><span id="dlText"></span><span id="ulText"></span>
+                            <span class="span hostos" onclick="location.reload(true);"></span> <span class="span hosttime"></span> <span class="span hostconn"></span> <span class="span processCount"></span> <span class="span ip">ip</span> <input title="测速" type="button" class="button" id="startStopBtn" onclick="startStop()" value="Speed"> <span id="pingText"></span><span id="jitText"></span><span id="dlText"></span><span id="ulText"></span>
                         </th>
                     </tr>
                 </thead>
@@ -130,11 +130,11 @@
                         <td>负载:<span class="loadAvg"></span>
                             <div class="progress_middle"><div class="progress-bar cpuPercent"></div></div>
                         </td>
-                        <td>上传:<span class="netSent"></span> <span class="netSentSpeed"></span>
-                            <div class="progress_middle"><div class="progress-bar netSentSpeedPercent"></div></div>
+                        <td>上传:<span class="netUp"></span> <span class="netUpSpeed"></span>
+                            <div class="progress_middle"><div class="progress-bar netUpSpeedPercent"></div></div>
                         </td>
-                        <td>下载:<span class="netRecv"></span> <span class="netRecvSpeed"></span>
-                            <div class="progress_middle"><div class="progress-bar netRecvSpeedPercent"></div></div>
+                        <td>下载:<span class="netDown"></span> <span class="netDownSpeed"></span>
+                            <div class="progress_middle"><div class="progress-bar netDownSpeedPercent"></div></div>
                         </td>
                     </tr>
                 </tbody>
@@ -193,7 +193,7 @@
                 return day+"/"+hour+"/"+minute;
             }
             function getbasicData(){
-                fetch('/basic', {
+                fetch(window.location.pathname+'/basic', {
                     method: 'POST'
                 })
                 .then(response => response.json())
@@ -209,17 +209,19 @@
                     document.querySelector('.swapPercent').style.width = dataJSON.swap_used/dataJSON.swap_total*100 + '%';
                     document.querySelector('.loadAvg').innerHTML = `${(dataJSON.load1 ?? 0).toFixed(1)}/${(dataJSON.load5 ?? 0).toFixed(1)}/${(dataJSON.load15 ?? 0).toFixed(1)} ${dataJSON.process_count}`;
                     document.querySelector('.cpuPercent').style.width = dataJSON.cpu + '%';
-                    document.querySelector('.netSent').innerHTML = renderSize(dataJSON.net_out_transfer);
-                    document.querySelector('.netRecv').innerHTML = renderSize(dataJSON.net_in_transfer);
-                    document.querySelector('.netSentSpeed').innerHTML = formatsize(dataJSON.net_out_speed*8);
-                    document.querySelector('.netRecvSpeed').innerHTML = formatsize(dataJSON.net_in_speed*8);
-                    document.querySelector('.netSentSpeedPercent').style.width = dataJSON.net_out_speed/calculateMaxRange(dataJSON.net_out_speed)*100 + '%';
-                    document.querySelector('.netRecvSpeedPercent').style.width = dataJSON.net_in_speed/calculateMaxRange(dataJSON.net_in_speed)*100 + '%';
-                    document.querySelector('.hostos').innerHTML = dataJSON.platform.includes("Windows") ? 'Windows' : dataJSON.platform;
-                    document.querySelector('.hostos').setAttribute('title', `系统:${dataJSON.platform}-${dataJSON.platformVersion}位数:${dataJSON.arch}`);
+                    document.querySelector('.processCount').innerHTML = dataJSON.process_count;
+                    document.querySelector('.netUp').innerHTML = renderSize(dataJSON.net_out_transfer);
+                    document.querySelector('.netDown').innerHTML = renderSize(dataJSON.net_in_transfer);
+                    document.querySelector('.netUpSpeed').innerHTML = formatsize(dataJSON.net_out_speed*8);
+                    document.querySelector('.netDownSpeed').innerHTML = formatsize(dataJSON.net_in_speed*8);
+                    document.querySelector('.netUpSpeedPercent').style.width = dataJSON.net_out_speed/calculateMaxRange(dataJSON.net_out_speed)*100 + '%';
+                    document.querySelector('.netDownSpeedPercent').style.width = dataJSON.net_in_speed/calculateMaxRange(dataJSON.net_in_speed)*100 + '%';
+                    document.querySelector('.hostos').innerHTML = `${dataJSON.platform} ${dataJSON.platform_version} ${dataJSON.arch}`;
+                    document.querySelector('.hostos').setAttribute('title', `${dataJSON.platform} ${dataJSON.platform_version} ${dataJSON.arch}`);
                     document.querySelector('.hosttime').innerHTML = secondsFormat(dataJSON.uptime);
-                    document.querySelector('.hosttime').setAttribute('title', `开机时间:${new Date(parseInt(dataJSON.boot_time)*1000).toLocaleString()}`);
+                    document.querySelector('.hosttime').setAttribute('title', `${new Date(parseInt(dataJSON.boot_time)*1000).toLocaleString()}`);
                     document.querySelector('.hostconn').innerHTML = dataJSON.tcp_conn_count + '/' + dataJSON.udp_conn_count;
+                    document.querySelector('.ip').setAttribute('title', `${dataJSON.ipv4 + '/' + dataJSON.ipv6}`);
                 })
                 .catch(error => console.error('Error fetching system data:', error));
             }
@@ -229,10 +231,13 @@
         <script type="text/javascript">
             function I(id){return document.getElementById(id);}
             var w=null; //speedtest worker
+            const baseOrigin = window.location.origin;
+            const basePath = window.location.pathname.replace(/\/$/, "");
+            const fullBase = baseOrigin + basePath; //兼容子目录形式，避免根目录方式被探测滥用
             var parameters={ //custom test parameters. See doc.md for a complete list 下面是获取当前url并去掉多余参数
-                url_dl: window.location.href.replace(window.location.search,"").replace(window.location.pathname,"")+"/garbage", // path to a large file or garbage.php, used for download test. must be relative to this js file
-                url_ul: window.location.href.replace(window.location.search,"").replace(window.location.pathname,"")+"/empty", // path to an empty file, used for upload test. must be relative to this js file
-                url_ping: window.location.href.replace(window.location.search,"").replace(window.location.pathname,"")+"/empty", // path to an empty file, used for ping test. must be relative to this js file
+                url_dl: fullBase+"/garbage", // path to a large file or garbage.php, used for download test. must be relative to this js file
+                url_ul: fullBase+"/empty", // path to an empty file, used for upload test. must be relative to this js file
+                url_ping: fullBase+"/empty", // path to an empty file, used for ping test. must be relative to this js file
             };
             var workerjs = function() {
                 //worker.js部分

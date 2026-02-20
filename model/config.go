@@ -38,12 +38,14 @@ type AgentConfig struct {
 	InsecureTLS                 bool            `koanf:"insecure_tls" json:"insecure_tls"`                       // 是否禁用证书检查
 	UseIPv6CountryCode          bool            `koanf:"use_ipv6_country_code" json:"use_ipv6_country_code"`     // 默认优先展示IPv6旗帜
 	UseGiteeToUpgrade           bool            `koanf:"use_gitee_to_upgrade" json:"use_gitee_to_upgrade"`       // 强制从Gitee获取更新
+	UseAtomGitToUpgrade         bool            `koanf:"use_atomgit_to_upgrade" json:"use_atomgit_to_upgrade"`   // 强制从AtomGit获取更新
 	DisableNat                  bool            `koanf:"disable_nat" json:"disable_nat"`                         // 关闭内网穿透
 	DisableSendQuery            bool            `koanf:"disable_send_query" json:"disable_send_query"`           // 关闭发送TCP/ICMP/HTTP请求
 	IPReportPeriod              uint32          `koanf:"ip_report_period" json:"ip_report_period"`               // IP上报周期
 	SelfUpdatePeriod            uint32          `koanf:"self_update_period" json:"self_update_period"`           // 自动更新周期
 	CustomIPApi                 []string        `koanf:"custom_ip_api" json:"custom_ip_api,omitempty"`           // 自定义 IP API                      // 重载间隔
 	ProbeTestPort               uint32          `koanf:"probe_test_port" json:"probe_test_port"`                 // 探针测试端口 //diy
+	ProbeTestPath               string          `koanf:"probe_test_path" json:"probe_test_path"`                 // 探针测试路径 //diy
 
 	k        *koanf.Koanf `json:"-"`
 	filePath string       `json:"-"`
@@ -76,9 +78,12 @@ func (c *AgentConfig) Read(path string) error {
 		return err
 	}
 
-	//diy 设置探针测试默认端口 todo:新加入机器从服务端创建uuid，重装机器如果有相同ip存在数据库，就重复利用
+	//diy 设置探针测试默认端口
 	if c.ProbeTestPort == 0 {
 		c.ProbeTestPort = 2080
+	}
+	if c.ProbeTestPath == "" {
+		c.ProbeTestPath = "/probetest"
 	}
 	if c.UUID == "" {
 		if uuid, err := uuid.GenerateUUID(); err == nil {
