@@ -316,15 +316,15 @@ func run() {
 		})
 		// 提供静态文件服务(HTML页面)
 		http.HandleFunc(agentConfig.ProbeTestPath, func(w http.ResponseWriter, r *http.Request) {
-			http.ServeFile(w, r, "probetest.html") //debug模式 二进制同目录静态文件 下面把静态文件编译进二进制
-			/*data, err := probeHTML.ReadFile("probetest.html")
+			//http.ServeFile(w, r, "probetest.html") //debug模式 二进制同目录静态文件 下面把静态文件编译进二进制
+			data, err := probeHTML.ReadFile("probetest.html")
 			if err != nil {
 				w.WriteHeader(http.StatusInternalServerError)
 				printf("Failed to read embedded probe.html: %v", err)
 				return
 			}
 			w.Header().Set("Content-Type", "text/html")
-			w.Write(data)*/
+			w.Write(data)
 		})
 		// ping
 		http.HandleFunc(agentConfig.ProbeTestPath+"/empty", func (w http.ResponseWriter, r *http.Request) {
