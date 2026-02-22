@@ -112,7 +112,7 @@
                 <thead>
                     <tr>
                         <th colspan="8">
-                            <span class="span hostos" onclick="location.reload(true);"></span> <span class="span hosttime"></span> <span class="span hostconn"></span> <span class="span processCount"></span> <span class="span ip">ip</span> <input title="测速" type="button" class="button" id="startStopBtn" onclick="startStop()" value="Speed"> <span id="pingText"></span><span id="jitText"></span><span id="dlText"></span><span id="ulText"></span>
+                            <span class="span hostos" onclick="location.reload(true);"></span> <span class="span hosttime"></span> <span class="span hostconn"></span> <span class="span processCount"></span> <span class="ipv4"></span> <span class="ipv6"></span> <input title="测速" type="button" class="button" id="startStopBtn" onclick="startStop()" value="Speed"> <span id="pingText"></span><span id="jitText"></span><span id="dlText"></span><span id="ulText"></span>
                         </th>
                     </tr>
                 </thead>
@@ -221,7 +221,8 @@
                     document.querySelector('.hosttime').innerHTML = secondsFormat(dataJSON.uptime);
                     document.querySelector('.hosttime').setAttribute('title', `${new Date(parseInt(dataJSON.boot_time)*1000).toLocaleString()}`);
                     document.querySelector('.hostconn').innerHTML = dataJSON.tcp_conn_count + '/' + dataJSON.udp_conn_count;
-                    document.querySelector('.ip').setAttribute('title', `${dataJSON.ipv4 + '/' + dataJSON.ipv6}`);
+                    document.querySelector('.ipv4').innerHTML = dataJSON.ipv4 ? `<a href="http://${dataJSON.ipv4}:${window.location.port}${window.location.pathname}" class="span">ipv4</a>` : '';
+                    document.querySelector('.ipv6').innerHTML = dataJSON.ipv6 ? `<a href="http://[${dataJSON.ipv6}]:${window.location.port}${window.location.pathname}" class="span">ipv6</a>` : '';
                 })
                 .catch(error => console.error('Error fetching system data:', error));
             }
