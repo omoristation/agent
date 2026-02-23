@@ -26,7 +26,7 @@
             }
             table tr:first-child th:first-child{border-top-left-radius: 8px;}
             table tr:first-child th:last-child{border-top-right-radius: 8px;}
-            table th{padding: 3px 6px; font-weight:bold;background:#dedede;color:#626262;border:1px solid #CCCCCC; text-align:left;}
+            table th{padding: 3px 6px; font-weight:bold;background:rgb(231, 229, 228);color:#626262;border:1px solid #CCCCCC; text-align:left;}
             table tr{padding: 0;}
             table td{padding: 6px 6px; border:1px solid #CCCCCC;overflow:hidden;white-space:nowrap;min-width:135px;border-right:0px;border-bottom:0px;}
             .page {width: auto; padding: 0px 0px; margin: 0 auto; text-align: left;}
@@ -44,65 +44,19 @@
                 .page tr { display: block; }
             }
             .progress {
-                margin:5px 0 3px 0;
+                margin:2px 0 0 0;
                 background-color: #e5e9eb;
                 height: 0.4em;
                 position: relative;
                 width: 100%;
                 border-radius: .25rem;
             }
-            .progress_middle {
-                margin:0 0 0 0;
-                background-color: #e5e9eb;
-                height:0.4em;
-                position: relative;
-                width:100%;
-                border-radius: .25rem;
-            }
             .progress-bar {
-                float: left;
+                background: linear-gradient(to right,#10b981,#22C55E,#84CC16,#FACC15,#FBBF24,#F97316,#EF4444,#B91C1C);
+                background-size: 135px 0.25em; #对应上面的最小宽度 min-width:135px
+                position: relative;
                 height: 100%;
                 border-radius: .25rem;
-            }
-            .diskPercent {
-                background-color: #FF7744;
-                height: 100%;
-                position: relative;
-            }
-            .memUsedPercent {
-                background-color: #40E0D0;
-                height: 100%;
-                position: relative;
-            }
-            .memCachedPercent {
-                background-color: #BBBB00;
-                height: 100%;
-                position: relative;
-            }
-            .memBuffersPercent {
-                background-color: #BA55D3;
-                height: 100%;
-                position: relative;
-            }
-            .swapPercent {
-                background-color: #555555;
-                height: 100%;
-                position: relative;
-            }
-            .cpuPercent {
-                background-color: #FF9500;
-                height: 100%;
-                position: relative;
-            }
-            .netUpSpeedPercent {
-                background-color: #4cd964;
-                height: 100%;
-                position: relative;
-            }
-            .netDownSpeedPercent {
-                background-color: #00BBFF;
-                height: 100%;
-                position: relative;
             }
         </style>
     </head>
@@ -119,22 +73,22 @@
                 <tbody>
                     <tr>
                         <td>磁盘:<span class="diskUsed"></span>/<span class="diskTotal"></span>
-                            <div class="progress_middle"><div class="progress-bar diskPercent"></div> </div>
+                            <div class="progress"><div class="progress-bar diskPercent"></div> </div>
                         </td>
                         <td>内存:<span class="memoryUsed"></span>/<span class="memoryTotal"></span>
-                            <div class="progress_middle"><div class="progress-bar memUsedPercent"></div><div class="progress-bar memCachedPercent"></div><div class="progress-bar memBuffersPercent"></div></div>
+                            <div class="progress"><div class="progress-bar memUsedPercent"></div></div>
                         </td>
                         <td>虚拟:<span class="swapUsed"></span>/<span class="swapTotal"></span>
-                            <div class="progress_middle"><div class="progress-bar swapPercent"></div></div>
+                            <div class="progress"><div class="progress-bar swapPercent"></div></div>
                         </td>
                         <td>负载:<span class="loadAvg"></span>
-                            <div class="progress_middle"><div class="progress-bar cpuPercent"></div></div>
+                            <div class="progress"><div class="progress-bar cpuPercent"></div></div>
                         </td>
                         <td>上传:<span class="netUp"></span> <span class="netUpSpeed"></span>
-                            <div class="progress_middle"><div class="progress-bar netUpSpeedPercent"></div></div>
+                            <div class="progress"><div class="progress-bar netUpSpeedPercent"></div></div>
                         </td>
                         <td>下载:<span class="netDown"></span> <span class="netDownSpeed"></span>
-                            <div class="progress_middle"><div class="progress-bar netDownSpeedPercent"></div></div>
+                            <div class="progress"><div class="progress-bar netDownSpeedPercent"></div></div>
                         </td>
                     </tr>
                 </tbody>
@@ -206,7 +160,7 @@
                     document.querySelector('.memUsedPercent').style.width = dataJSON.mem_used/dataJSON.mem_total*100 + '%';
                     document.querySelector('.swapUsed').innerHTML = renderSize(dataJSON.swap_used);
                     document.querySelector('.swapTotal').innerHTML = renderSize(dataJSON.swap_total);
-                    document.querySelector('.swapPercent').style.width = dataJSON.swap_used/dataJSON.swap_total*100 + '%';
+                    document.querySelector('.swapPercent').style.width = (dataJSON.swap_used/dataJSON.swap_total*100 || 0) + '%';
                     document.querySelector('.loadAvg').innerHTML = `${(dataJSON.load1 ?? 0).toFixed(1)}/${(dataJSON.load5 ?? 0).toFixed(1)}/${(dataJSON.load15 ?? 0).toFixed(1)} ${dataJSON.process_count}`;
                     document.querySelector('.cpuPercent').style.width = dataJSON.cpu + '%';
                     document.querySelector('.processCount').innerHTML = dataJSON.process_count;
